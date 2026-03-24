@@ -1,0 +1,48 @@
+(kicad_sch
+  (version 20231120)
+  (generator "eeschema")
+  (generator_version "8.0")
+  (uuid "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+  (paper "A3")
+  (title_block
+    (title "ESP32-S3 RF Dev Board")
+    (date "2026-02-23")
+    (rev "1.0")
+    (company "Hugh")
+    (comment 1 "ESP32-S3 QFN56 + Johanson 2450AT18A100 chip antenna")
+    (comment 2 "4-layer JLC04161H-7628 stackup")
+    (comment 3 "RF trace: 0.6mm 50-ohm microstrip on 0.2mm prepreg Er=4.4")
+    (comment 4 "USB-UART: CP2102 | Power: AP2112K-3.3V LDO")
+  )
+  (lib_symbols
+  )
+  (no_connect (at 50 50) (uuid "nc-0001"))
+  (text "ESP32-S3 RF Development Board - Schematic Placeholder"
+    (at 50 60)
+    (effects (font (size 3 3) (thickness 0.3)))
+    (uuid "txt-0001")
+  )
+  (text "See PCB layout for full design. Component list:\n  U1: ESP32-S3 QFN56\n  U2: AP2112K-3.3V SOT-23-5\n  U3: CP2102-GMR QFN-28\n  ANT1: Johanson 2450AT18A100\n  J1: USB-C 16P\n  J2: u.FL connector\n  J3: UART 4-pin header\n  J4: I2C 4-pin header\n  J5: SPI 6-pin header\n  SW1: Reset button\n  SW2: Boot button\n  D1: Status LED (red)\n  D2: Power LED (green)\n  R1: 330R (status LED)\n  R2: 1k (power LED)\n  C1-C6: 100nF decoupling (ESP32-S3)\n  C7-C8: 10uF bulk (LDO)\n  C9-C11: 100nF bypass"
+    (at 50 80)
+    (effects (font (size 1.5 1.5) (thickness 0.15)))
+    (uuid "txt-0002")
+  )
+  (text "RF Design Notes:"
+    (at 50 155)
+    (effects (font (size 2 2) (thickness 0.2) bold))
+    (uuid "txt-0003")
+  )
+  (text "- 50-ohm microstrip: 0.6mm wide on F.Cu, 0.2mm prepreg (7628) to In1.Cu GND plane\n- Keepout zone: 5mm radius around ANT1, no copper any layer\n- GND stitching vias: every 6mm along RF trace (lambda/10 at 2.4GHz in FR4)\n- Er=4.4 (7628 prepreg), loss tangent=0.02"
+    (at 50 162)
+    (effects (font (size 1.5 1.5) (thickness 0.15)))
+    (uuid "txt-0004")
+  )
+  (text "Power Tree:\nUSB-C VBUS (5V) -> C9,C10 bypass -> AP2112K-3.3 LDO -> C7(in),C8(out) -> 3.3V rail\n3.3V -> ESP32-S3 (C1-C6 decoupling) | CP2102 (C11) | LED (R2,D2)"
+    (at 50 180)
+    (effects (font (size 1.5 1.5) (thickness 0.15)))
+    (uuid "txt-0005")
+  )
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

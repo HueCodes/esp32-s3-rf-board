@@ -1,0 +1,28 @@
+# KiCAD
+*.kicad_prl
+fp-info-cache
+*-backups/
+*-rescue-backup/
+_autosave-*
+
+# KiCAD generated outputs (regenerate from scripts or KiCAD)
+gerbers/
+*.gbr
+*.drl
+*.pos
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# ESP-IDF build artifacts
+firmware/build/
+firmware/sdkconfig
+firmware/dependencies.lock
+firmware/managed_components/
+
+# macOS
+.DS_Store
