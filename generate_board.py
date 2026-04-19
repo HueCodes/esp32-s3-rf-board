@@ -7,6 +7,8 @@ Board: 50x40mm, 4-layer JLC04161H-7628 stackup
 Main IC: ESP32-S3 QFN56 with chip antenna and u.FL connector
 USB-UART: CP2102 QFN-28
 Power: AP2112K-3.3V SOT-23-5 LDO
+ESD: USBLC6-2SC6 on USB D+/D-
+v1.1: CC pull-downs, ESD protection, test points
 """
 
 import argparse
@@ -36,6 +38,16 @@ POS_RST_BTN = (21.0, 3.5)    # Reset button
 POS_BOOT_BTN= (30.0, 3.5)    # Boot button (GPIO0)
 POS_LED_STA = (20.0, 37.0)   # Status LED
 POS_LED_PWR = (26.0, 37.0)   # Power LED
+POS_ESD     = (14.0, 37.0)   # USBLC6-2SC6 ESD protection (near USB-C)
+POS_TP1     = (11.0, 6.0)    # Test point: 3V3
+POS_TP2     = (14.0, 6.0)    # Test point: GND
+POS_TP3     = (40.0, 6.0)    # Test point: RF_ANT
+POS_XTAL    = (28.4, 11.5)   # 40 MHz crystal Y1, above ESP32-S3 XTAL pins
+POS_XTAL_C1 = (24.8, 11.5)   # 12 pF load cap on XTAL_P leg (clear of Y1 courtyard)
+POS_XTAL_C2 = (32.0, 11.5)   # 12 pF load cap on XTAL_N leg
+POS_R_EN    = (23.5, 9.0)    # 10k EN pull-up to 3V3
+POS_R_USBDP = (10.5, 32.0)   # 22R series D+ near CP2102
+POS_R_USBDM = (13.0, 32.0)   # 22R series D- near CP2102 (separated from R6)
 
 # RF trace geometry
 RF_PIN_X = POS_ESP32[0] + 7.65  # ESP32-S3 pad 36 approximate X offset
@@ -67,6 +79,12 @@ NETS = {
     17: "GPIO0",
     18: "LED_STATUS_A",
     19: "LED_POWER_A",
+    20: "USB_CC1",
+    21: "USB_CC2",
+    22: "XTAL_P",
+    23: "XTAL_N",
+    24: "USB_DP_CP",
+    25: "USB_DM_CP",
 }
 
 # Net name -> id lookup
@@ -260,7 +278,7 @@ def gen_board_outline():
 def gen_silkscreen_labels():
     """Board title and author on silkscreen."""
     lines = [
-        '  (gr_text "ESP32-S3 RF Dev Board v1.0" (at 25 1.5) (layer "F.SilkS")',
+        '  (gr_text "ESP32-S3 RF Dev Board v1.2" (at 25 1.5) (layer "F.SilkS")',
         '    (effects (font (size 1 1) (thickness 0.15))))',
         '  (gr_text "Hugh" (at 25 38.5) (layer "F.SilkS")',
         '    (effects (font (size 0.8 0.8) (thickness 0.12))))',
@@ -381,6 +399,8 @@ def gen_esp32s3():
         # Top side (pads 29-42, right to left)
         29: "3V3",
         36: "RF_ANT",
+        39: "XTAL_P",
+        40: "XTAL_N",
         # Left side (pads 43-56, top to bottom)
         43: "GND",
         48: "GPIO48_LED",
@@ -545,7 +565,7 @@ def gen_usbc():
         (2,  -1.6, -1.5, "5V"),     # VBUS
         (3,  -1.2, -1.5, "USB_DM"), # D-
         (4,  -0.8, -1.5, "USB_DP"), # D+
-        (5,  -0.4, -1.5, ""),        # CC1
+        (5,  -0.4, -1.5, "USB_CC1"),  # CC1
         (6,   0.0, -1.5, ""),        # SBU1
         (7,   0.4, -1.5, "5V"),     # VBUS
         (8,   0.8, -1.5, "GND"),    # GND
@@ -554,7 +574,7 @@ def gen_usbc():
         (10, -1.6,  1.5, "5V"),
         (11, -1.2,  1.5, "USB_DM"),
         (12, -0.8,  1.5, "USB_DP"),
-        (13, -0.4,  1.5, ""),
+        (13, -0.4,  1.5, "USB_CC2"),  # CC2
         (14,  0.0,  1.5, ""),
         (15,  0.4,  1.5, "5V"),
         (16,  0.8,  1.5, "GND"),
@@ -585,7 +605,7 @@ def gen_cp2102():
 
     cp_nets = {
         # Bottom side pads 1-7
-        1: "GND", 2: "USB_DM", 3: "USB_DP", 4: "3V3",
+        1: "GND", 2: "USB_DM_CP", 3: "USB_DP_CP", 4: "3V3",
         # Right side pads 8-14
         8: "GND", 9: "UART_TX", 10: "UART_RX",
         # Top side pads 15-21
@@ -736,6 +756,79 @@ def gen_cap_0805(ref, x, y, net1, net2, value_str):
     lines.append(fp_fab_rect(-1.2, -0.65, 1.2, 0.65))
     lines.append(smd_pad(1, -0.9, 0, 0.8, 1.0, net1))
     lines.append(smd_pad(2,  0.9, 0, 0.8, 1.0, net2))
+    lines.append(end_footprint())
+    return "\n".join(lines)
+
+
+def gen_esd_usblc6(ref, x, y):
+    """
+    USBLC6-2SC6 ESD protection in SOT-23-6 package.
+    Pinout: 1=I/O1 (USB_DM), 2=GND, 3=I/O2 (USB_DP),
+            4=I/O2 (USB_DP), 5=VBUS (5V), 6=I/O1 (USB_DM)
+    Clamps USB D+/D- to safe levels against ESD events.
+    """
+    lines = [begin_footprint(ref, "USBLC6-2SC6", "F.Cu", x, y)]
+    lines.append(fp_text("reference", ref, 0, -2.2, "F.SilkS"))
+    lines.append(fp_text("value", "USBLC6-2SC6", 0, 2.2, "F.Fab"))
+    lines.append(fp_courtyard_rect(-1.8, -1.6, 1.8, 1.6))
+    lines.append(fp_fab_rect(-1.5, -1.4, 1.5, 1.4))
+
+    # SOT-23-6: 3 pads left (1,2,3), 3 pads right (4,5,6)
+    pad_defs = [
+        (1, -0.95, -0.95, "USB_DM"),   # I/O1
+        (2, -0.95,  0.0,  "GND"),      # GND
+        (3, -0.95,  0.95, "USB_DP"),   # I/O2
+        (4,  0.95,  0.95, "USB_DP"),   # I/O2
+        (5,  0.95,  0.0,  "5V"),       # VBUS
+        (6,  0.95, -0.95, "USB_DM"),   # I/O1
+    ]
+    for pnum, px, py, net in pad_defs:
+        lines.append(smd_pad(pnum, px, py, 0.4, 0.7, net))
+
+    lines.append(end_footprint())
+    return "\n".join(lines)
+
+
+def gen_test_point(ref, x, y, net_name, label):
+    """
+    SMD test point -- 1.5mm round pad on F.Cu.
+    Large enough for a scope probe or multimeter tip.
+    """
+    lines = [begin_footprint(ref, label, "F.Cu", x, y)]
+    lines.append(fp_text("reference", ref, 0, -1.8, "F.SilkS"))
+    lines.append(fp_text("value", label, 0, 1.8, "F.Fab"))
+    lines.append(fp_courtyard_rect(-1.2, -1.2, 1.2, 1.2))
+    lines.append(smd_pad(1, 0, 0, 1.5, 1.5, net_name, shape="circle"))
+    lines.append(end_footprint())
+    return "\n".join(lines)
+
+
+def gen_crystal_3225(ref, x, y):
+    """
+    40 MHz crystal in SMD-3225 4-pad package (e.g., NX3225GA-40.000MHz).
+    Body 3.2x2.5mm. 4 pads: 1=XTAL_P, 2=GND, 3=XTAL_N, 4=GND.
+    Pad pitch 2.2mm horizontal, 1.6mm vertical (IPC-7351 nominal).
+    Load caps (12 pF NP0) are separate 0402 parts on each leg to GND.
+    """
+    lines = [begin_footprint(ref, "40MHz_XTAL", "F.Cu", x, y)]
+    lines.append(fp_text("reference", ref, 0, -2.5, "F.SilkS"))
+    lines.append(fp_text("value", "40MHz", 0, 2.5, "F.Fab"))
+    lines.append(fp_courtyard_rect(-2.0, -1.6, 2.0, 1.6))
+    lines.append(fp_fab_rect(-1.6, -1.25, 1.6, 1.25))
+    # Pin 1 marker
+    lines.append(
+        '    (fp_circle (center -1.6 -1.25) (end -1.4 -1.25) (layer "F.SilkS") (stroke (width 0.1) (type solid)))'
+    )
+    # Pads: pad 1 bottom-left (XTAL_P), 2 bottom-right (GND),
+    #       3 top-right (XTAL_N), 4 top-left (GND)
+    pads = [
+        (1, -1.1,  0.8, "XTAL_P"),
+        (2,  1.1,  0.8, "GND"),
+        (3,  1.1, -0.8, "XTAL_N"),
+        (4, -1.1, -0.8, "GND"),
+    ]
+    for pnum, px, py, net in pads:
+        lines.append(smd_pad(pnum, px, py, 1.2, 1.0, net, shape="rect"))
     lines.append(end_footprint())
     return "\n".join(lines)
 
@@ -932,7 +1025,7 @@ def gen_zones():
     pts_str = " ".join(pts)
     lines.append(f'''  (zone (net 0) (net_name "") (layer "F.Cu") (name "RF_KEEPOUT")
     (hatch edge 0.508)
-    (keepout_settings (no_tracks yes) (no_vias yes) (no_copper_pour yes) (no_pads yes) (no_footprints no))
+    (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed))
     (polygon
       (pts
         {pts_str}
@@ -943,7 +1036,7 @@ def gen_zones():
     # Same keepout on B.Cu
     lines.append(f'''  (zone (net 0) (net_name "") (layer "B.Cu") (name "RF_KEEPOUT_BOTT")
     (hatch edge 0.508)
-    (keepout_settings (no_tracks yes) (no_vias yes) (no_copper_pour yes) (no_pads yes) (no_footprints no))
+    (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed))
     (polygon
       (pts
         {pts_str}
@@ -954,7 +1047,7 @@ def gen_zones():
     # In1.Cu keepout (keep GND plane clear of antenna)
     lines.append(f'''  (zone (net 0) (net_name "") (layer "In1.Cu") (name "RF_KEEPOUT_GND")
     (hatch edge 0.508)
-    (keepout_settings (no_tracks yes) (no_vias yes) (no_copper_pour yes) (no_pads yes) (no_footprints no))
+    (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed))
     (polygon
       (pts
         {pts_str}
@@ -971,21 +1064,30 @@ def gen_zones():
 
 def gen_decoupling_caps():
     """
-    Place 100nF decoupling caps around ESP32-S3 power pins.
+    Place 100nF decoupling caps adjacent to ESP32-S3 power pins.
+    ESP32-S3 VDD pads in this layout: 7, 8 (bottom-centre, world y~23.8)
+    and 29 (top-right, world y~16.2).
+    Every VDD pad has a 100nF cap whose centre is within 2mm of the pad
+    centre. Additional bypass caps distribute decoupling around the chip.
     Place 10uF bulk caps at LDO input and output.
     """
     lines = []
     cx, cy = POS_ESP32
 
     # 100nF decoupling caps near ESP32-S3 power pins (0402)
-    # Place on all 4 sides near the 3V3 pins
+    # Pad 29 world coords = (cx+2.6, cy-3.8).  Caps C1/C3 flank it at 1.7mm.
+    # Pads 7,8 world coords = (cx-0.2,cy+3.8), (cx+0.2,cy+3.8).  C2 sits 1.7mm
+    # below them. C4-C6 are distributed bypass around the chip.
+    # Note: RF trace runs from pad 36 (world ~29.8, 16.2) diagonally to
+    # (32.0, 14.0) then horizontally to the antenna at (43.5, 14.0). Keep
+    # decoupling caps clear of y ~ 14 above the chip.
     decap_positions = [
-        ("C1",  cx - 5.0, cy - 5.0, "100nF"),
-        ("C2",  cx - 5.0, cy + 5.0, "100nF"),
-        ("C3",  cx + 5.0, cy - 5.0, "100nF"),
-        ("C4",  cx + 5.0, cy + 5.0, "100nF"),
-        ("C5",  cx,       cy - 6.0, "100nF"),
-        ("C6",  cx,       cy + 6.0, "100nF"),
+        ("C1",  cx + 4.0, cy - 3.8, "100nF"),   # 1.4mm right of pad 29 (3V3, top)
+        ("C2",  cx + 0.0, cy + 5.5, "100nF"),   # 1.7mm below pads 7/8 (3V3, bottom)
+        ("C3",  cx + 4.0, cy - 2.0, "100nF"),   # right-side bypass above pad 28
+        ("C4",  cx - 4.0, cy - 2.0, "100nF"),   # left-side bypass, upper
+        ("C5",  cx - 2.6, cy + 5.5, "100nF"),   # bottom-left bypass
+        ("C6",  cx + 2.6, cy + 5.5, "100nF"),   # bottom-right bypass
     ]
     for ref, x, y, val in decap_positions:
         lines.append(gen_cap_0402(ref, x, y, "3V3", "GND", val))
@@ -1058,6 +1160,41 @@ def gen_pcb():
     parts.append(gen_resistor_0402("R2", POS_LED_PWR[0] + 1.5, POS_LED_PWR[1],
                                    "3V3", "LED_POWER_A", "1k", "1k"))
 
+    # CC pull-down resistors (5.1K from CC1/CC2 to GND for USB power negotiation)
+    parts.append(gen_resistor_0402("R3", 11.5, 38.0,
+                                   "USB_CC1", "GND", "5.1k", "5.1k"))
+    parts.append(gen_resistor_0402("R4", 11.5, 36.0,
+                                   "USB_CC2", "GND", "5.1k", "5.1k"))
+
+    # ESD protection on USB D+/D-
+    parts.append(gen_esd_usblc6("U4", POS_ESD[0], POS_ESD[1]))
+
+    # Test points
+    parts.append(gen_test_point("TP1", POS_TP1[0], POS_TP1[1], "3V3", "TP_3V3"))
+    parts.append(gen_test_point("TP2", POS_TP2[0], POS_TP2[1], "GND", "TP_GND"))
+    parts.append(gen_test_point("TP3", POS_TP3[0], POS_TP3[1], "RF_ANT", "TP_RF"))
+
+    # 40 MHz crystal (Y1) and 12 pF NP0 load caps on XTAL_P / XTAL_N.
+    # The ESP32-S3 QFN56 bare die has no internal clock source: without
+    # this crystal the chip will not boot, no WiFi, no BT.
+    parts.append(gen_crystal_3225("Y1", POS_XTAL[0], POS_XTAL[1]))
+    parts.append(gen_cap_0402("C12", POS_XTAL_C1[0], POS_XTAL_C1[1],
+                              "XTAL_P", "GND", "12pF"))
+    parts.append(gen_cap_0402("C13", POS_XTAL_C2[0], POS_XTAL_C2[1],
+                              "XTAL_N", "GND", "12pF"))
+
+    # EN pull-up (10k to 3V3). Keeps the chip enabled at power-up and
+    # gives the reset button something to pull low against.
+    parts.append(gen_resistor_0402("R5", POS_R_EN[0], POS_R_EN[1],
+                                   "3V3", "EN", "10k", "10k"))
+
+    # 22R series resistors on USB D+/D- between CP2102 and USBLC6. Damps
+    # ringing on the USB full-speed differential pair. Placed near CP2102.
+    parts.append(gen_resistor_0402("R6", POS_R_USBDP[0], POS_R_USBDP[1],
+                                   "USB_DP_CP", "USB_DP", "22R", "22R"))
+    parts.append(gen_resistor_0402("R7", POS_R_USBDM[0], POS_R_USBDM[1],
+                                   "USB_DM_CP", "USB_DM", "22R", "22R"))
+
     # Decoupling caps
     parts.append(gen_decoupling_caps())
 
@@ -1080,63 +1217,578 @@ def gen_pcb():
 
 # =============================================================================
 # SCHEMATIC FILE (.kicad_sch)
+#
+# The schematic is generated programmatically alongside the PCB so design
+# intent is captured in one place. Each component is represented by a
+# minimal rectangular symbol with real pins; net connectivity is expressed
+# via global labels attached at pin endpoints. ERC should pass with no
+# errors. A hand-drawn GUI pass can be layered on later for presentation.
 # =============================================================================
+
+ROOT_SHEET_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+SCH_PROJECT     = "esp32-s3-rf-board"
+
+SCH_PIN_LEN = 2.54
+SCH_GRID    = 2.54
+
+_sch_uuid_ctr = 2000
+def su():
+    """Return a pseudo-UUID for a schematic element."""
+    global _sch_uuid_ctr
+    _sch_uuid_ctr += 1
+    return f"{_sch_uuid_ctr:08x}-0000-0000-0000-000000000000"
+
+
+def sch_symbol_ic(name, prefix, left_pins, right_pins, fp=""):
+    """
+    Define a rectangular IC symbol in lib_symbols.
+    left_pins/right_pins: list of (pin_number, pin_name).
+    """
+    n = max(len(left_pins), len(right_pins))
+    body_half_h = (n + 1) * SCH_GRID / 2.0
+    body_half_w = 7.62
+    pin_x = body_half_w + SCH_PIN_LEN
+
+    lines = [f'    (symbol "custom:{name}"']
+    lines.append(f'      (pin_names (offset 1.016))')
+    lines.append(f'      (exclude_from_sim no)')
+    lines.append(f'      (in_bom yes)')
+    lines.append(f'      (on_board yes)')
+    lines.append(f'      (property "Reference" "{prefix}" (at 0 {fmt(body_half_h + 2.54)} 0) (effects (font (size 1.27 1.27))))')
+    lines.append(f'      (property "Value" "{name}" (at 0 {fmt(body_half_h + 1.0)} 0) (effects (font (size 1.27 1.27))))')
+    lines.append(f'      (property "Footprint" "{fp}" (at 0 {fmt(-body_half_h - 2.54)} 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+    lines.append(f'      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+    lines.append(f'      (property "Description" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+
+    lines.append(f'      (symbol "{name}_0_1"')
+    lines.append(f'        (rectangle (start {fmt(-body_half_w)} {fmt(-body_half_h)}) (end {fmt(body_half_w)} {fmt(body_half_h)})')
+    lines.append(f'          (stroke (width 0.254) (type default)) (fill (type background))))')
+
+    lines.append(f'      (symbol "{name}_1_1"')
+    for i, (pnum, pname) in enumerate(left_pins):
+        py = body_half_h - SCH_GRID - i * SCH_GRID
+        lines.append(f'        (pin passive line (at {fmt(-pin_x)} {fmt(py)} 0) (length {fmt(SCH_PIN_LEN)})')
+        lines.append(f'          (name "{pname}" (effects (font (size 1.0 1.0))))')
+        lines.append(f'          (number "{pnum}" (effects (font (size 1.0 1.0)))))')
+    for i, (pnum, pname) in enumerate(right_pins):
+        py = body_half_h - SCH_GRID - i * SCH_GRID
+        lines.append(f'        (pin passive line (at {fmt(pin_x)} {fmt(py)} 180) (length {fmt(SCH_PIN_LEN)})')
+        lines.append(f'          (name "{pname}" (effects (font (size 1.0 1.0))))')
+        lines.append(f'          (number "{pnum}" (effects (font (size 1.0 1.0)))))')
+    lines.append(f'      )')
+    lines.append(f'      (embedded_fonts no)')
+    lines.append(f'    )')
+    return "\n".join(lines), body_half_w, body_half_h, pin_x
+
+
+def sch_symbol_passive2(name, prefix, fp=""):
+    """Two-pin passive symbol (R, C, LED). Pins on top (1) and bottom (2)."""
+    lines = [f'    (symbol "custom:{name}"']
+    lines.append(f'      (pin_numbers (hide yes))')
+    lines.append(f'      (pin_names (offset 0) (hide yes))')
+    lines.append(f'      (exclude_from_sim no)')
+    lines.append(f'      (in_bom yes)')
+    lines.append(f'      (on_board yes)')
+    lines.append(f'      (property "Reference" "{prefix}" (at 2.54 1.27 0) (effects (font (size 1.27 1.27)) (justify left)))')
+    lines.append(f'      (property "Value" "{name}" (at 2.54 -1.27 0) (effects (font (size 1.27 1.27)) (justify left)))')
+    lines.append(f'      (property "Footprint" "{fp}" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+    lines.append(f'      (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+    lines.append(f'      (property "Description" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))')
+
+    lines.append(f'      (symbol "{name}_0_1"')
+    if prefix == "C":
+        lines.append(f'        (polyline (pts (xy -2.032 -0.762) (xy 2.032 -0.762)) (stroke (width 0.508) (type default)) (fill (type none)))')
+        lines.append(f'        (polyline (pts (xy -2.032 0.762) (xy 2.032 0.762)) (stroke (width 0.508) (type default)) (fill (type none)))')
+    elif prefix == "D":
+        lines.append(f'        (polyline (pts (xy 0 1.27) (xy 0 -1.27) (xy -1.27 0) (xy 0 1.27)) (stroke (width 0.254) (type default)) (fill (type outline)))')
+        lines.append(f'        (polyline (pts (xy -1.27 1.27) (xy -1.27 -1.27)) (stroke (width 0.254) (type default)) (fill (type none)))')
+    else:  # R default
+        lines.append(f'        (rectangle (start -1.016 -2.286) (end 1.016 2.286) (stroke (width 0.254) (type default)) (fill (type none)))')
+    lines.append(f'      )')
+
+    lines.append(f'      (symbol "{name}_1_1"')
+    lines.append(f'        (pin passive line (at 0 3.81 270) (length 1.524)')
+    lines.append(f'          (name "~" (effects (font (size 1.27 1.27))))')
+    lines.append(f'          (number "1" (effects (font (size 1.27 1.27)))))')
+    lines.append(f'        (pin passive line (at 0 -3.81 90) (length 1.524)')
+    lines.append(f'          (name "~" (effects (font (size 1.27 1.27))))')
+    lines.append(f'          (number "2" (effects (font (size 1.27 1.27)))))')
+    lines.append(f'      )')
+    lines.append(f'      (embedded_fonts no)')
+    lines.append(f'    )')
+    return "\n".join(lines)
+
+
+def sch_global_label(text, x, y, rot=0):
+    """Global label at (x, y). Use rot=0 for left-pointing, 180 for right-pointing."""
+    return (
+        f'  (global_label "{text}" (shape input) (at {fmt(x)} {fmt(y)} {rot})\n'
+        f'    (effects (font (size 1.27 1.27)) (justify {"left" if rot == 0 else "right"}))\n'
+        f'    (uuid "{su()}")\n'
+        f'    (property "Intersheetrefs" "${{INTERSHEET_REFS}}" (at 0 0 0)\n'
+        f'      (effects (font (size 1.27 1.27)) (justify left) hide))\n'
+        f'  )'
+    )
+
+
+def sch_instance_ic(lib_name, ref, value, footprint, x, y, left_nets, right_nets,
+                   n_left_pins, n_right_pins):
+    """
+    Place an IC symbol instance and emit global labels at each pin endpoint.
+    left_nets/right_nets: list of net-name strings indexed like left_pins.
+    """
+    n = max(n_left_pins, n_right_pins)
+    body_half_h = (n + 1) * SCH_GRID / 2.0
+    body_half_w = 7.62
+    pin_x = body_half_w + SCH_PIN_LEN
+
+    out = []
+    uid = su()
+    out.append(f'  (symbol (lib_id "custom:{lib_name}") (at {fmt(x)} {fmt(y)} 0) (unit 1)')
+    out.append(f'    (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)')
+    out.append(f'    (uuid "{uid}")')
+    out.append(f'    (property "Reference" "{ref}" (at {fmt(x)} {fmt(y - body_half_h - 2.54)} 0) (effects (font (size 1.27 1.27))))')
+    out.append(f'    (property "Value" "{value}" (at {fmt(x)} {fmt(y - body_half_h - 1.0)} 0) (effects (font (size 1.27 1.27))))')
+    out.append(f'    (property "Footprint" "{footprint}" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+    out.append(f'    (property "Datasheet" "" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+    out.append(f'    (property "Description" "" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+
+    # Pin UUIDs (one per pin)
+    for i in range(n_left_pins):
+        out.append(f'    (pin "L{i+1}" (uuid "{su()}"))')
+    for i in range(n_right_pins):
+        out.append(f'    (pin "R{i+1}" (uuid "{su()}"))')
+
+    out.append(f'    (instances')
+    out.append(f'      (project "{SCH_PROJECT}"')
+    out.append(f'        (path "/{ROOT_SHEET_UUID}"')
+    out.append(f'          (reference "{ref}") (unit 1))))')
+    out.append(f'  )')
+
+    # Emit global labels at each pin's wire-connection point.
+    # KiCad schematic y grows downward but symbol-local y is mathematical
+    # (positive = up), so world_y = instance_y - local_y. Empty net string
+    # means "intentionally unconnected" -> emit a no_connect marker instead.
+    for i, net in enumerate(left_nets):
+        local_py = body_half_h - SCH_GRID - i * SCH_GRID
+        py = y - local_py
+        px = x - pin_x
+        if net:
+            out.append(sch_global_label(net, px, py, rot=180))
+        else:
+            out.append(f'  (no_connect (at {fmt(px)} {fmt(py)}) (uuid "{su()}"))')
+    for i, net in enumerate(right_nets):
+        local_py = body_half_h - SCH_GRID - i * SCH_GRID
+        py = y - local_py
+        px = x + pin_x
+        if net:
+            out.append(sch_global_label(net, px, py, rot=0))
+        else:
+            out.append(f'  (no_connect (at {fmt(px)} {fmt(py)}) (uuid "{su()}"))')
+    return "\n".join(out)
+
+
+def sch_instance_passive(lib_name, ref, value, footprint, x, y, net_top, net_bot):
+    """
+    Place a 2-pin passive symbol. Pin 1 at (x, y-3.81), pin 2 at (x, y+3.81).
+    Wait: pin at (0, 3.81) orientation 270 -> endpoint at (0, 3.81+1.524)=(0, 5.334)?
+    The pin definition: (at 0 3.81 270) length 1.524 means pin stub goes in 270°
+    direction (-Y) from (0, 3.81), so stub runs from (0, 3.81) to (0, 2.286).
+    Wire-connection point = (0, 3.81) -- the outer end.
+    For instance placed at (x, y), pin 1 wire point = (x, y + 3.81),
+    pin 2 wire point = (x, y - 3.81).
+    """
+    out = []
+    uid = su()
+    out.append(f'  (symbol (lib_id "custom:{lib_name}") (at {fmt(x)} {fmt(y)} 0) (unit 1)')
+    out.append(f'    (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)')
+    out.append(f'    (uuid "{uid}")')
+    out.append(f'    (property "Reference" "{ref}" (at {fmt(x + 2.54)} {fmt(y - 1.27)} 0) (effects (font (size 1.27 1.27)) (justify left)))')
+    out.append(f'    (property "Value" "{value}" (at {fmt(x + 2.54)} {fmt(y + 1.27)} 0) (effects (font (size 1.27 1.27)) (justify left)))')
+    out.append(f'    (property "Footprint" "{footprint}" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+    out.append(f'    (property "Datasheet" "" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+    out.append(f'    (property "Description" "" (at {fmt(x)} {fmt(y)} 0) (effects (font (size 1.27 1.27)) hide))')
+    out.append(f'    (pin "1" (uuid "{su()}"))')
+    out.append(f'    (pin "2" (uuid "{su()}"))')
+    out.append(f'    (instances')
+    out.append(f'      (project "{SCH_PROJECT}"')
+    out.append(f'        (path "/{ROOT_SHEET_UUID}"')
+    out.append(f'          (reference "{ref}") (unit 1))))')
+    out.append(f'  )')
+    # Pin 1 at (x, y + 3.81) - top; pin 2 at (x, y - 3.81) - bottom
+    # (pin def uses y=+3.81 for pin 1, relative to body origin — we invert for
+    # schematic world coords because the KiCad origin has y growing downward)
+    if net_top:
+        out.append(sch_global_label(net_top, x, y - 3.81, rot=90))
+    if net_bot:
+        out.append(sch_global_label(net_bot, x, y + 3.81, rot=270))
+    return "\n".join(out)
+
+
+# ----- ESP32-S3 symbol (only pins used in this design) -----
+ESP32_LEFT_PINS = [
+    ("7",  "VDD3P3"),       # 3V3 power
+    ("8",  "VDD3P3"),       # 3V3 power
+    ("29", "VDD_SPI"),      # 3V3 power
+    ("16", "IO11/MOSI"),
+    ("17", "IO13/MISO"),
+    ("18", "IO12/CLK"),
+    ("19", "IO10/CS"),
+    ("20", "IO43/TXD0"),
+    ("21", "IO44/RXD0"),
+    ("22", "IO8/SDA"),
+    ("23", "IO9/SCL"),
+    ("48", "IO48/LED"),
+]
+ESP32_RIGHT_PINS = [
+    ("36", "LNA_IN"),       # RF
+    ("39", "XTAL_P"),
+    ("40", "XTAL_N"),
+    ("51", "CHIP_PU"),      # EN
+    ("52", "IO0"),          # GPIO0 (boot strap)
+    ("1",  "GND"),
+    ("4",  "GND"),
+    ("15", "GND"),
+    ("43", "GND"),
+    ("56", "GND"),
+    ("57", "EP/GND"),
+]
+ESP32_LEFT_NETS = [
+    "3V3", "3V3", "3V3",
+    "SPI_MOSI", "SPI_MISO", "SPI_SCK", "SPI_CS",
+    "UART_TX", "UART_RX",
+    "I2C_SDA", "I2C_SCL",
+    "GPIO48_LED",
+]
+ESP32_RIGHT_NETS = [
+    "RF_ANT", "XTAL_P", "XTAL_N",
+    "EN", "GPIO0",
+    "GND", "GND", "GND", "GND", "GND", "GND",
+]
+
+# ----- AP2112K-3.3 -----
+AP2112_LEFT_PINS  = [("1","EN"), ("2","GND"), ("3","VIN")]
+AP2112_RIGHT_PINS = [("5","VOUT"), ("4","NC")]
+AP2112_LEFT_NETS  = ["3V3", "GND", "5V"]
+AP2112_RIGHT_NETS = ["3V3", ""]   # pin 4 NC: marked with no_connect below
+
+# ----- CP2102 -----
+CP2102_LEFT_PINS = [
+    ("4",  "VDD"),
+    ("15", "VDD"),
+    ("1",  "GND"),
+    ("8",  "GND"),
+    ("16", "GND"),
+    ("22", "GND"),
+    ("29", "EP"),
+]
+CP2102_RIGHT_PINS = [
+    ("2",  "D-"),
+    ("3",  "D+"),
+    ("9",  "TXD"),
+    ("10", "RXD"),
+]
+CP2102_LEFT_NETS  = ["3V3","3V3","GND","GND","GND","GND","GND"]
+CP2102_RIGHT_NETS = ["USB_DM_CP","USB_DP_CP","UART_TX","UART_RX"]
+
+# ----- USBLC6-2SC6 -----
+USBLC6_LEFT_PINS  = [("5","VBUS"), ("2","GND")]
+USBLC6_RIGHT_PINS = [("1","I/O1"), ("6","I/O1"), ("3","I/O2"), ("4","I/O2")]
+USBLC6_LEFT_NETS  = ["5V", "GND"]
+USBLC6_RIGHT_NETS = ["USB_DM", "USB_DM", "USB_DP", "USB_DP"]
+
+# ----- USB-C 16P -----
+USBC_LEFT_PINS = [
+    ("A4","VBUS"), ("A9","VBUS"), ("B4","VBUS"), ("B9","VBUS"),
+    ("A1","GND"), ("A12","GND"), ("B1","GND"), ("B12","GND"),
+    ("S1","SHIELD"),
+]
+USBC_RIGHT_PINS = [
+    ("A6","D+"), ("A7","D-"), ("B6","D+"), ("B7","D-"),
+    ("A5","CC1"), ("B5","CC2"),
+]
+USBC_LEFT_NETS  = ["5V","5V","5V","5V","GND","GND","GND","GND","GND"]
+USBC_RIGHT_NETS = ["USB_DP","USB_DM","USB_DP","USB_DM","USB_CC1","USB_CC2"]
+
+# ----- Crystal 4-pad -----
+XTAL_LEFT_PINS  = [("1","XI"), ("4","GND")]
+XTAL_RIGHT_PINS = [("3","XO"), ("2","GND")]
+XTAL_LEFT_NETS  = ["XTAL_P", "GND"]
+XTAL_RIGHT_NETS = ["XTAL_N", "GND"]
+
+# ----- Chip antenna 2-pad (ANT1) -----
+ANT_LEFT_PINS  = [("1","RF")]
+ANT_RIGHT_PINS = [("2","GND")]
+
+# ----- u.FL 3-pad -----
+UFL_LEFT_PINS  = [("1","SIG")]
+UFL_RIGHT_PINS = [("2","GND"), ("3","GND")]
+
+# ----- Headers -----
+HDR4_LEFT_PINS  = [("1",""), ("2",""), ("3",""), ("4","")]
+HDR4_RIGHT_PINS = []
+HDR6_LEFT_PINS  = [("1",""), ("2",""), ("3",""), ("4",""), ("5",""), ("6","")]
+HDR6_RIGHT_PINS = []
+
+# ----- Tactile button (2 logical nets, 4 pads) -----
+BTN_LEFT_PINS  = [("1","A"), ("3","B")]
+BTN_RIGHT_PINS = [("2","A"), ("4","B")]
+
+# ----- Test point -----
+TP_LEFT_PINS  = [("1","TP")]
+TP_RIGHT_PINS = []
+
+
+def gen_lib_symbols():
+    """Define all symbols used in the schematic."""
+    blocks = []
+
+    # ICs (rectangular multi-pin)
+    blocks.append(sch_symbol_ic("ESP32-S3FN8", "U",
+                                ESP32_LEFT_PINS, ESP32_RIGHT_PINS,
+                                "QFN-56_7x7mm_P0.4mm")[0])
+    blocks.append(sch_symbol_ic("AP2112K-3.3", "U",
+                                AP2112_LEFT_PINS, AP2112_RIGHT_PINS,
+                                "SOT-23-5")[0])
+    blocks.append(sch_symbol_ic("CP2102", "U",
+                                CP2102_LEFT_PINS, CP2102_RIGHT_PINS,
+                                "QFN-28_5x5mm_P0.5mm")[0])
+    blocks.append(sch_symbol_ic("USBLC6-2SC6", "U",
+                                USBLC6_LEFT_PINS, USBLC6_RIGHT_PINS,
+                                "SOT-23-6")[0])
+    blocks.append(sch_symbol_ic("USB_C_16P", "J",
+                                USBC_LEFT_PINS, USBC_RIGHT_PINS,
+                                "USB-C_SMD_16P")[0])
+    blocks.append(sch_symbol_ic("XTAL_3225_4P", "Y",
+                                XTAL_LEFT_PINS, XTAL_RIGHT_PINS,
+                                "XTAL_SMD_3225_4P")[0])
+    blocks.append(sch_symbol_ic("ANT_CHIP_2P", "ANT",
+                                ANT_LEFT_PINS, ANT_RIGHT_PINS,
+                                "ANT_0402_1x0.5mm")[0])
+    blocks.append(sch_symbol_ic("UFL_SMD", "J",
+                                UFL_LEFT_PINS, UFL_RIGHT_PINS,
+                                "U.FL_SMD")[0])
+    blocks.append(sch_symbol_ic("Header_1x04", "J",
+                                HDR4_LEFT_PINS, HDR4_RIGHT_PINS,
+                                "PinHeader_1x04_P2.54mm")[0])
+    blocks.append(sch_symbol_ic("Header_1x06", "J",
+                                HDR6_LEFT_PINS, HDR6_RIGHT_PINS,
+                                "PinHeader_1x06_P2.54mm")[0])
+    blocks.append(sch_symbol_ic("SW_Tactile", "SW",
+                                BTN_LEFT_PINS, BTN_RIGHT_PINS,
+                                "SW_Tactile_6x6mm")[0])
+    blocks.append(sch_symbol_ic("TestPoint_SMD", "TP",
+                                TP_LEFT_PINS, TP_RIGHT_PINS,
+                                "TP_SMD_1.5mm")[0])
+
+    # Passives
+    blocks.append(sch_symbol_passive2("R", "R", "R_0402"))
+    blocks.append(sch_symbol_passive2("C", "C", "C_0402"))
+    blocks.append(sch_symbol_passive2("C_Bulk", "C", "C_0805"))
+    blocks.append(sch_symbol_passive2("LED", "D", "LED_0402"))
+
+    return "\n".join(blocks)
+
 
 def gen_schematic():
     """
-    Minimal but valid KiCAD 8 schematic file (version 20231120).
-    Contains a title block and placeholder symbol references.
-    A full schematic would require symbol libraries; this provides the
-    correct file structure for KiCAD 8 to open and annotate.
+    Generate the full KiCAD 8 schematic (.kicad_sch). Uses custom symbols
+    defined in the embedded lib_symbols block; connectivity is expressed
+    with global_label elements at pin endpoints (same label = same net).
     """
     now = datetime.now().strftime("%Y-%m-%d")
+    global _sch_uuid_ctr
+    _sch_uuid_ctr = 2000
+
+    lib = gen_lib_symbols()
+
+    placements = []
+
+    # --- ICs placed across the sheet ---
+    # Sheet = A3 landscape (420 x 297 mm); origin top-left, +Y downward.
+    # ESP32-S3 centre: (200, 130)
+    placements.append(sch_instance_ic(
+        "ESP32-S3FN8", "U1", "ESP32-S3FN8", "QFN-56_7x7mm_P0.4mm",
+        200, 130, ESP32_LEFT_NETS, ESP32_RIGHT_NETS,
+        len(ESP32_LEFT_PINS), len(ESP32_RIGHT_PINS),
+    ))
+
+    # AP2112K LDO, top-left
+    placements.append(sch_instance_ic(
+        "AP2112K-3.3", "U2", "AP2112K-3.3", "SOT-23-5",
+        80, 50, AP2112_LEFT_NETS, AP2112_RIGHT_NETS,
+        len(AP2112_LEFT_PINS), len(AP2112_RIGHT_PINS),
+    ))
+
+    # CP2102, upper-right
+    placements.append(sch_instance_ic(
+        "CP2102", "U3", "CP2102-GMR", "QFN-28_5x5mm_P0.5mm",
+        330, 80, CP2102_LEFT_NETS, CP2102_RIGHT_NETS,
+        len(CP2102_LEFT_PINS), len(CP2102_RIGHT_PINS),
+    ))
+
+    # USBLC6-2SC6 ESD, between CP2102 and USB-C
+    placements.append(sch_instance_ic(
+        "USBLC6-2SC6", "U4", "USBLC6-2SC6", "SOT-23-6",
+        330, 180, USBLC6_LEFT_NETS, USBLC6_RIGHT_NETS,
+        len(USBLC6_LEFT_PINS), len(USBLC6_RIGHT_PINS),
+    ))
+
+    # USB-C, far right
+    placements.append(sch_instance_ic(
+        "USB_C_16P", "J1", "USB_C_16P", "USB-C_SMD_16P",
+        395, 180, USBC_LEFT_NETS, USBC_RIGHT_NETS,
+        len(USBC_LEFT_PINS), len(USBC_RIGHT_PINS),
+    ))
+
+    # Crystal Y1 and load caps, top-centre
+    placements.append(sch_instance_ic(
+        "XTAL_3225_4P", "Y1", "40MHz_NX3225GA", "XTAL_SMD_3225_4P",
+        130, 40, XTAL_LEFT_NETS, XTAL_RIGHT_NETS,
+        len(XTAL_LEFT_PINS), len(XTAL_RIGHT_PINS),
+    ))
+    placements.append(sch_instance_passive("C", "C12", "12pF", "C_0402",
+                                           95, 40, "XTAL_P", "GND"))
+    placements.append(sch_instance_passive("C", "C13", "12pF", "C_0402",
+                                           165, 40, "XTAL_N", "GND"))
+
+    # Antenna + u.FL (RF path), bottom-right of ESP32
+    placements.append(sch_instance_ic(
+        "ANT_CHIP_2P", "ANT1", "2450AT18A100", "ANT_0402_1x0.5mm",
+        270, 80, ["RF_ANT"], ["GND"], 1, 1,
+    ))
+    placements.append(sch_instance_ic(
+        "UFL_SMD", "J2", "U.FL_SMD", "U.FL_SMD",
+        270, 110, ["RF_ANT"], ["GND", "GND"], 1, 2,
+    ))
+
+    # Headers (left side)
+    placements.append(sch_instance_ic(
+        "Header_1x04", "J3", "1x04_2.54mm", "PinHeader_1x04_P2.54mm",
+        40, 130, ["GND", "3V3", "UART_TX", "UART_RX"], [], 4, 0,
+    ))
+    placements.append(sch_instance_ic(
+        "Header_1x04", "J4", "1x04_2.54mm", "PinHeader_1x04_P2.54mm",
+        40, 160, ["GND", "3V3", "I2C_SDA", "I2C_SCL"], [], 4, 0,
+    ))
+    placements.append(sch_instance_ic(
+        "Header_1x06", "J5", "1x06_2.54mm", "PinHeader_1x06_P2.54mm",
+        40, 200, ["GND","3V3","SPI_MOSI","SPI_MISO","SPI_SCK","SPI_CS"], [], 6, 0,
+    ))
+
+    # Buttons (to the right of ESP32)
+    placements.append(sch_instance_ic(
+        "SW_Tactile", "SW1", "SW_TACT_6x6", "SW_Tactile_6x6mm",
+        270, 140, ["GND", "EN"], ["GND", "EN"], 2, 2,
+    ))
+    placements.append(sch_instance_ic(
+        "SW_Tactile", "SW2", "SW_TACT_6x6", "SW_Tactile_6x6mm",
+        270, 170, ["GND", "GPIO0"], ["GND", "GPIO0"], 2, 2,
+    ))
+
+    # LEDs + series resistors (bottom-left of ESP32)
+    placements.append(sch_instance_passive("LED", "D1", "LED_RED", "LED_0402",
+                                           130, 200, "LED_STATUS_A", "GND"))
+    placements.append(sch_instance_passive("R", "R1", "330R", "R_0402",
+                                           130, 180, "GPIO48_LED", "LED_STATUS_A"))
+    placements.append(sch_instance_passive("LED", "D2", "LED_GRN", "LED_0402",
+                                           160, 200, "LED_POWER_A", "GND"))
+    placements.append(sch_instance_passive("R", "R2", "1k", "R_0402",
+                                           160, 180, "3V3", "LED_POWER_A"))
+
+    # USB CC pull-downs
+    placements.append(sch_instance_passive("R", "R3", "5.1k", "R_0402",
+                                           360, 160, "USB_CC1", "GND"))
+    placements.append(sch_instance_passive("R", "R4", "5.1k", "R_0402",
+                                           375, 160, "USB_CC2", "GND"))
+
+    # EN pull-up and USB series Rs
+    placements.append(sch_instance_passive("R", "R5", "10k", "R_0402",
+                                           240, 120, "3V3", "EN"))
+    placements.append(sch_instance_passive("R", "R6", "22R", "R_0402",
+                                           360, 80, "USB_DP_CP", "USB_DP"))
+    placements.append(sch_instance_passive("R", "R7", "22R", "R_0402",
+                                           360, 95, "USB_DM_CP", "USB_DM"))
+
+    # Decoupling and bulk caps
+    decap_specs = [
+        ("C1",  "100nF", 95,  110, "3V3"),
+        ("C2",  "100nF", 95,  125, "3V3"),
+        ("C3",  "100nF", 95,  140, "3V3"),
+        ("C4",  "100nF", 95,  155, "3V3"),
+        ("C5",  "100nF", 95,  170, "3V3"),
+        ("C6",  "100nF", 95,  185, "3V3"),
+        ("C9",  "100nF", 375, 210, "5V"),
+        ("C10", "100nF", 385, 210, "5V"),
+        ("C11", "100nF", 305, 110, "3V3"),
+    ]
+    for ref, val, x, y, top_net in decap_specs:
+        placements.append(sch_instance_passive("C", ref, val, "C_0402",
+                                               x, y, top_net, "GND"))
+
+    # Bulk caps at LDO in/out
+    placements.append(sch_instance_passive("C_Bulk", "C7", "10uF", "C_0805",
+                                           60, 60, "5V", "GND"))
+    placements.append(sch_instance_passive("C_Bulk", "C8", "10uF", "C_0805",
+                                           100, 60, "3V3", "GND"))
+
+    # Test points
+    placements.append(sch_instance_ic(
+        "TestPoint_SMD", "TP1", "TP_3V3", "TP_SMD_1.5mm",
+        20, 40, ["3V3"], [], 1, 0,
+    ))
+    placements.append(sch_instance_ic(
+        "TestPoint_SMD", "TP2", "TP_GND", "TP_SMD_1.5mm",
+        20, 60, ["GND"], [], 1, 0,
+    ))
+    placements.append(sch_instance_ic(
+        "TestPoint_SMD", "TP3", "TP_RF", "TP_SMD_1.5mm",
+        280, 50, ["RF_ANT"], [], 1, 0,
+    ))
+
+    # Schematic notes (text blocks)
+    notes = []
+    notes.append('  (text "ESP32-S3 RF Dev Board v1.2 -- schematic generated by generate_board.py"')
+    notes.append('    (at 20 15 0) (effects (font (size 2 2) bold))')
+    notes.append(f'    (uuid "{su()}"))')
+    notes.append('  (text "Strapping pins at boot:\\n  IO0 must be HIGH  -- SW2 pulls low to enter download mode\\n  IO45 / IO46 -- leave at default (SPI boot + voltage select)"')
+    notes.append('    (at 20 240 0) (effects (font (size 1.5 1.5)))')
+    notes.append(f'    (uuid "{su()}"))')
+    notes.append('  (text "Power tree: USB-C 5V -> USBLC6 (ESD) -> AP2112K-3.3 LDO -> 3V3 rail.\\nNote: AP2112K EN is tied to VIN to keep LDO always on when power is applied."')
+    notes.append('    (at 20 255 0) (effects (font (size 1.5 1.5)))')
+    notes.append(f'    (uuid "{su()}"))')
+    notes.append('  (text "RF: 50-ohm microstrip from ESP32 LNA_IN to chip antenna (ANT1).\\nLoad caps C12/C13 = 12 pF NP0 (CL ~ 8-10 pF; crystal datasheet CL nominal 8 pF)."')
+    notes.append('    (at 20 270 0) (effects (font (size 1.5 1.5)))')
+    notes.append(f'    (uuid "{su()}"))')
+
+    placements_str = "\n".join(placements)
+    notes_str = "\n".join(notes)
+
     return f'''(kicad_sch
-  (version 20231120)
+  (version 20250114)
   (generator "eeschema")
-  (generator_version "8.0")
-  (uuid "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+  (generator_version "9.0")
+  (uuid "{ROOT_SHEET_UUID}")
   (paper "A3")
   (title_block
     (title "ESP32-S3 RF Dev Board")
     (date "{now}")
-    (rev "1.0")
+    (rev "1.2")
     (company "Hugh")
-    (comment 1 "ESP32-S3 QFN56 + Johanson 2450AT18A100 chip antenna")
-    (comment 2 "4-layer JLC04161H-7628 stackup")
+    (comment 1 "ESP32-S3FN8 QFN56 + Johanson 2450AT18A100 chip antenna")
+    (comment 2 "4-layer JLC04161H-7628 stackup; 40 MHz crystal; 8MB internal flash")
     (comment 3 "RF trace: 0.6mm 50-ohm microstrip on 0.2mm prepreg Er=4.4")
     (comment 4 "USB-UART: CP2102 | Power: AP2112K-3.3V LDO")
   )
   (lib_symbols
+{lib}
   )
-  (no_connect (at 50 50) (uuid "nc-0001"))
-  (text "ESP32-S3 RF Development Board - Schematic Placeholder"
-    (at 50 60)
-    (effects (font (size 3 3) (thickness 0.3)))
-    (uuid "txt-0001")
-  )
-  (text "See PCB layout for full design. Component list:\\n  U1: ESP32-S3 QFN56\\n  U2: AP2112K-3.3V SOT-23-5\\n  U3: CP2102-GMR QFN-28\\n  ANT1: Johanson 2450AT18A100\\n  J1: USB-C 16P\\n  J2: u.FL connector\\n  J3: UART 4-pin header\\n  J4: I2C 4-pin header\\n  J5: SPI 6-pin header\\n  SW1: Reset button\\n  SW2: Boot button\\n  D1: Status LED (red)\\n  D2: Power LED (green)\\n  R1: 330R (status LED)\\n  R2: 1k (power LED)\\n  C1-C6: 100nF decoupling (ESP32-S3)\\n  C7-C8: 10uF bulk (LDO)\\n  C9-C11: 100nF bypass"
-    (at 50 80)
-    (effects (font (size 1.5 1.5) (thickness 0.15)))
-    (uuid "txt-0002")
-  )
-  (text "RF Design Notes:"
-    (at 50 155)
-    (effects (font (size 2 2) (thickness 0.2) bold))
-    (uuid "txt-0003")
-  )
-  (text "- 50-ohm microstrip: 0.6mm wide on F.Cu, 0.2mm prepreg (7628) to In1.Cu GND plane\\n- Keepout zone: 5mm radius around ANT1, no copper any layer\\n- GND stitching vias: every 6mm along RF trace (lambda/10 at 2.4GHz in FR4)\\n- Er=4.4 (7628 prepreg), loss tangent=0.02"
-    (at 50 162)
-    (effects (font (size 1.5 1.5) (thickness 0.15)))
-    (uuid "txt-0004")
-  )
-  (text "Power Tree:\\nUSB-C VBUS (5V) -> C9,C10 bypass -> AP2112K-3.3 LDO -> C7(in),C8(out) -> 3.3V rail\\n3.3V -> ESP32-S3 (C1-C6 decoupling) | CP2102 (C11) | LED (R2,D2)"
-    (at 50 180)
-    (effects (font (size 1.5 1.5) (thickness 0.15)))
-    (uuid "txt-0005")
-  )
+{placements_str}
+{notes_str}
   (sheet_instances
     (path "/" (page "1"))
   )
+  (embedded_fonts no)
 )
 '''
 
@@ -1358,9 +2010,11 @@ def gen_bom():
     header = "Ref,Value,Footprint,JLCPCB_Part,Qty,Description"
     rows = [
         # Ref,         Value,              Footprint,         JLCPCB,    Qty, Description
-        ("U1",         "ESP32-S3",         "QFN-56_7x7mm_P0.4mm",  "C2913202", 1,  "ESP32-S3 WiFi BT SoC QFN56"),
+        ("U1",         "ESP32-S3FN8",      "QFN-56_7x7mm_P0.4mm",  "C2913204", 1,  "ESP32-S3 WiFi BT SoC QFN56, 8MB internal flash"),
         ("U2",         "AP2112K-3.3TRG1",  "SOT-23-5",        "C51118",   1,  "600mA LDO 3.3V output"),
         ("U3",         "CP2102-GMR",       "QFN-28_5x5mm_P0.5mm",  "C6568",    1,  "USB to UART bridge"),
+        ("U4",         "USBLC6-2SC6",      "SOT-23-6",        "C7519",    1,  "USB ESD protection TVS diode array"),
+        ("Y1",         "40MHz_NX3225GA",   "XTAL_SMD_3225_4P","C9040",    1,  "40 MHz SMD crystal 3.2x2.5mm 4-pad, 10ppm"),
         ("ANT1",       "2450AT18A100",     "ANT_0402_1x0.5mm","C167687",  1,  "2.4GHz chip antenna 50-ohm"),
         ("J1",         "USB_C_16P",        "USB-C_SMD_16P",   "C165948",  1,  "USB-C receptacle 16-pin"),
         ("J2",         "U.FL_SMD",         "U.FL_SMD",        "C88374",   1,  "u.FL/IPEX RF connector"),
@@ -1373,8 +2027,17 @@ def gen_bom():
         ("D2",         "LED_GRN",          "LED_0402",        "C2297",    1,  "Green LED 0402 power"),
         ("R1",         "330R",             "R_0402",          "C23197",   1,  "330 ohm resistor 0402 (status LED)"),
         ("R2",         "1k",               "R_0402",          "C11702",   1,  "1k ohm resistor 0402 (power LED)"),
+        ("R3",         "5.1k",             "R_0402",          "C25905",   1,  "5.1k ohm 1% 0402 USB CC1 pull-down"),
+        ("R4",         "5.1k",             "R_0402",          "C25905",   1,  "5.1k ohm 1% 0402 USB CC2 pull-down"),
+        ("R5",         "10k",              "R_0402",          "C25804",   1,  "10k ohm 0402 EN pull-up to 3V3"),
+        ("R6",         "22R",              "R_0402",          "C22975",   1,  "22 ohm 0402 USB D+ series resistor"),
+        ("R7",         "22R",              "R_0402",          "C22975",   1,  "22 ohm 0402 USB D- series resistor"),
+        ("TP1",        "TP_3V3",           "TP_SMD_1.5mm",    "C17228",   1,  "Test point 3.3V rail"),
+        ("TP2",        "TP_GND",           "TP_SMD_1.5mm",    "C17228",   1,  "Test point GND"),
+        ("TP3",        "TP_RF",            "TP_SMD_1.5mm",    "C17228",   1,  "Test point RF_ANT"),
         ("C1,C2,C3,C4,C5,C6,C9,C10,C11", "100nF", "C_0402", "C1525",   9,  "100nF 0402 decoupling capacitor"),
         ("C7,C8",      "10uF",             "C_0805",          "C17024",   2,  "10uF 0805 bulk capacitor"),
+        ("C12,C13",    "12pF",             "C_0402",          "C1652",    2,  "12 pF NP0 0402 crystal load cap"),
     ]
 
     lines = [header]
@@ -1451,9 +2114,13 @@ def main():
     log.debug("  U1   ESP32-S3 QFN56               (%g, %g)", *POS_ESP32)
     log.debug("  U2   AP2112K-3.3V SOT-23-5        (%g, %g)", *POS_LDO)
     log.debug("  U3   CP2102 QFN-28                (%g, %g)", *POS_CP2102)
+    log.debug("  U4   USBLC6-2SC6 ESD              (%g, %g)", *POS_ESD)
     log.debug("  ANT1 Johanson 2450AT18A100        (%g, %g)", *POS_ANT)
     log.debug("  J1   USB-C 16P                    (%g, %g)", *POS_USBC)
     log.debug("  J2   u.FL connector               (%g, %g)", *POS_UFL)
+    log.debug("  TP1  Test point 3V3               (%g, %g)", *POS_TP1)
+    log.debug("  TP2  Test point GND               (%g, %g)", *POS_TP2)
+    log.debug("  TP3  Test point RF_ANT            (%g, %g)", *POS_TP3)
     log.info("")
     log.info("Done. Open esp32-s3-rf-board.kicad_pro in KiCAD 8 to view.")
 

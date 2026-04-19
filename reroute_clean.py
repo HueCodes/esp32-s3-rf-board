@@ -30,6 +30,10 @@ POS_RST_BTN  = (21.0, 3.5)
 POS_BOOT_BTN = (30.0, 3.5)
 POS_LED_STA  = (20.0, 37.5)
 POS_LED_PWR  = (26.0, 37.5)
+POS_ESD      = (14.0, 37.0)
+POS_TP1      = (11.0, 6.0)
+POS_TP2      = (14.0, 6.0)
+POS_TP3      = (40.0, 6.0)
 
 RF_TRACE_W   = 0.6
 RF_KEEPOUT_R = 5.0
@@ -55,6 +59,8 @@ NETS = {
     17: "GPIO0",
     18: "LED_STATUS_A",
     19: "LED_POWER_A",
+    20: "USB_CC1",
+    21: "USB_CC2",
 }
 
 NET_ID = {v: k for k, v in NETS.items()}
@@ -511,7 +517,7 @@ def gen_usbc():
         (2,  -1.6, -1.5, "5V"),
         (3,  -1.2, -1.5, "USB_DM"),
         (4,  -0.8, -1.5, "USB_DP"),
-        (5,  -0.4, -1.5, ""),
+        (5,  -0.4, -1.5, "USB_CC1"),
         (6,   0.0, -1.5, ""),
         (7,   0.4, -1.5, "5V"),
         (8,   0.8, -1.5, "GND"),
@@ -519,7 +525,7 @@ def gen_usbc():
         (10, -1.6,  1.5, "5V"),
         (11, -1.2,  1.5, "USB_DM"),
         (12, -0.8,  1.5, "USB_DP"),
-        (13, -0.4,  1.5, ""),
+        (13, -0.4,  1.5, "USB_CC2"),
         (14,  0.0,  1.5, ""),
         (15,  0.4,  1.5, "5V"),
         (16,  0.8,  1.5, "GND"),
@@ -678,6 +684,36 @@ def gen_cap_0805(ref, x, y, net1, net2, value_str):
     return "\n".join(lines)
 
 
+def gen_esd_usblc6(ref, x, y):
+    lines = [begin_footprint(ref, "USBLC6-2SC6", "F.Cu", x, y)]
+    lines.append(fp_text("reference", ref, 0, -2.2, "F.SilkS"))
+    lines.append(fp_text("value", "USBLC6-2SC6", 0, 2.2, "F.Fab"))
+    lines.append(fp_courtyard_rect(-1.8, -1.6, 1.8, 1.6))
+    lines.append(fp_fab_rect(-1.5, -1.4, 1.5, 1.4))
+    pad_defs = [
+        (1, -0.95, -0.95, "USB_DM"),
+        (2, -0.95,  0.0,  "GND"),
+        (3, -0.95,  0.95, "USB_DP"),
+        (4,  0.95,  0.95, "USB_DP"),
+        (5,  0.95,  0.0,  "5V"),
+        (6,  0.95, -0.95, "USB_DM"),
+    ]
+    for pnum, px, py, net in pad_defs:
+        lines.append(smd_pad(pnum, px, py, 0.4, 0.7, net))
+    lines.append(end_footprint())
+    return "\n".join(lines)
+
+
+def gen_test_point(ref, x, y, net_name, label):
+    lines = [begin_footprint(ref, label, "F.Cu", x, y)]
+    lines.append(fp_text("reference", ref, 0, -1.5, "F.SilkS"))
+    lines.append(fp_text("value", label, 0, 1.5, "F.Fab"))
+    lines.append(fp_courtyard_rect(-1.2, -1.2, 1.2, 1.2))
+    lines.append(smd_pad(1, 0, 0, 1.5, 1.5, net_name, shape="circle"))
+    lines.append(end_footprint())
+    return "\n".join(lines)
+
+
 def gen_decoupling_caps():
     lines = []
     cx, cy = POS_ESP32
@@ -804,8 +840,33 @@ def gen_routing():
     cp_dm_x = cpx + (cp_bot_start + 1 * 0.5)  # pad2, i=1
     cp_dm_y = cp_bot_py
 
-    add(route_45(j1_dp_x, j1_dp_y, cp_dp_x, cp_dp_y, USB_W, "F.Cu", "USB_DP"))
-    add(route_45(j1_dm_x, j1_dm_y, cp_dm_x, cp_dm_y, USB_W, "F.Cu", "USB_DM"))
+    # USB_CC1: J1 pad5 -> R3 pad1
+    # R3 at (11.5, 38), pad1 at rel(-0.5, 0) = (11, 38)
+    j1_cc1_x = j1x + (-0.4)
+    j1_cc1_y = j1y + (-1.5)
+    r3_x = 11.5 - 0.5
+    r3_y = 38.0
+    add(route_45(j1_cc1_x, j1_cc1_y, r3_x, r3_y, SIG_W, "F.Cu", "USB_CC1"))
+
+    # USB_CC2: J1 pad13 -> R4 pad1
+    # R4 at (11.5, 36), pad1 at rel(-0.5, 0) = (11, 36)
+    j1_cc2_x = j1x + (-0.4)
+    j1_cc2_y = j1y + (1.5)
+    r4_x = 11.5 - 0.5
+    r4_y = 36.0
+    add(route_45(j1_cc2_x, j1_cc2_y, r4_x, r4_y, SIG_W, "F.Cu", "USB_CC2"))
+
+    # USB ESD: Route USB D+/D- through U4
+    # U4 at POS_ESD = (14, 37)
+    esd_x, esd_y = POS_ESD
+    # J1 D+ to U4 pad3 at (esd_x-0.95, esd_y+0.95)
+    add(route_45(j1_dp_x, j1_dp_y, esd_x - 0.95, esd_y + 0.95, USB_W, "F.Cu", "USB_DP"))
+    # U4 pad4 to CP2102 D+ at (esd_x+0.95, esd_y+0.95)
+    add(route_45(esd_x + 0.95, esd_y + 0.95, cp_dp_x, cp_dp_y, USB_W, "F.Cu", "USB_DP"))
+    # J1 D- to U4 pad1 at (esd_x-0.95, esd_y-0.95)
+    add(route_45(j1_dm_x, j1_dm_y, esd_x - 0.95, esd_y - 0.95, USB_W, "F.Cu", "USB_DM"))
+    # U4 pad6 to CP2102 D- at (esd_x+0.95, esd_y-0.95)
+    add(route_45(esd_x + 0.95, esd_y - 0.95, cp_dm_x, cp_dm_y, USB_W, "F.Cu", "USB_DM"))
 
     # -----------------------------------------------------------------------
     # 5V POWER: J1 VBUS pads to LDO pin3 (VIN) on F.Cu 0.5mm
@@ -1127,6 +1188,18 @@ def gen_pcb():
                                    "GPIO48_LED", "LED_STATUS_A", "330R", "330R"))
     parts.append(gen_resistor_0402("R2", POS_LED_PWR[0] + 1.5, POS_LED_PWR[1],
                                    "3V3", "LED_POWER_A", "1k", "1k"))
+
+    # CC pull-down resistors
+    parts.append(gen_resistor_0402("R3", 11.5, 38.0,
+                                   "USB_CC1", "GND", "5.1k", "5.1k"))
+    parts.append(gen_resistor_0402("R4", 11.5, 36.0,
+                                   "USB_CC2", "GND", "5.1k", "5.1k"))
+    # ESD protection
+    parts.append(gen_esd_usblc6("U4", POS_ESD[0], POS_ESD[1]))
+    # Test points
+    parts.append(gen_test_point("TP1", POS_TP1[0], POS_TP1[1], "3V3", "TP_3V3"))
+    parts.append(gen_test_point("TP2", POS_TP2[0], POS_TP2[1], "GND", "TP_GND"))
+    parts.append(gen_test_point("TP3", POS_TP3[0], POS_TP3[1], "RF_ANT", "TP_RF"))
 
     parts.append(gen_decoupling_caps())
 
