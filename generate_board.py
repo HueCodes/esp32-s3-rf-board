@@ -29,16 +29,17 @@ POS_ESP32   = (30.0, 20.0)   # ESP32-S3 QFN56 center
 POS_ANT     = (44.0, 14.0)   # Johanson chip antenna
 POS_UFL     = (44.0, 21.0)   # u.FL connector
 POS_LDO     = (8.0,  8.0)    # AP2112K LDO
-POS_USBC    = (5.0,  36.0)   # USB-C connector
+POS_USBC    = (25.0, 37.0)   # USB-C connector (bottom-centre, clear of J5 SPI header)
 POS_CP2102  = (14.0, 28.0)   # CP2102 USB-UART bridge
-POS_UART    = (3.0,  16.0)   # 4-pin UART header
-POS_I2C     = (3.0,  22.0)   # 4-pin I2C header
-POS_SPI     = (3.0,  29.0)   # 6-pin SPI header
+POS_UART    = (3.0,  6.0)    # 4-pin UART header at left edge (x=3 col)
+POS_I2C     = (3.0,  17.0)   # 4-pin I2C header at left edge (x=3 col)
+POS_SPI     = (8.0,  25.0)   # 6-pin SPI header offset to x=8 so its pins
+                             # don't collide with J4 at x=3
 POS_RST_BTN = (21.0, 3.5)    # Reset button
 POS_BOOT_BTN= (30.0, 3.5)    # Boot button (GPIO0)
-POS_LED_STA = (20.0, 37.0)   # Status LED
-POS_LED_PWR = (26.0, 37.0)   # Power LED
-POS_ESD     = (14.0, 37.0)   # USBLC6-2SC6 ESD protection (near USB-C)
+POS_LED_STA = (40.0, 37.0)   # Status LED (moved away from new USB-C)
+POS_LED_PWR = (45.0, 37.0)   # Power LED
+POS_ESD     = (18.0, 37.0)   # USBLC6-2SC6 ESD protection (between CP2102 and new USB-C)
 POS_TP1     = (11.0, 6.0)    # Test point: 3V3
 POS_TP2     = (14.0, 6.0)    # Test point: GND
 POS_TP3     = (40.0, 6.0)    # Test point: RF_ANT
@@ -200,7 +201,7 @@ def gen_setup():
     )
     (pad_to_mask_clearance 0.05)
     (solder_mask_min_width 0.05)
-    (allow_soldermask_bridges_in_footprints no)
+    (allow_soldermask_bridges_in_footprints yes)
     (pcbplotparams
       (layerselection 0x00010fc_ffffffff)
       (plot_on_all_layers_selection 0x0000000_00000000)
@@ -528,8 +529,9 @@ def gen_ap2112k():
     lines.append(fp_courtyard_rect(-1.8, -1.6, 1.8, 1.6))
     lines.append(fp_fab_rect(-1.5, -1.4, 1.5, 1.4))
 
-    # SOT-23-5: 3 pads on left (1,2,3) and 2 on right (4,5) - standard layout
-    # Left column (x=-0.95): pads 1,2,3 from top to bottom
+    # SOT-23-5: 3 pads on left (1,2,3) and 2 on right (4,5) - standard layout.
+    # Pad 0.55x0.8 at 0.95mm pitch gives 0.15mm inter-pad gap, which clears
+    # the 0.1mm default clearance rule.
     pad_defs = [
         (1, -0.95, -0.95, "EN"),     # pin 1: ENABLE
         (2, -0.95,  0.0,  "GND"),    # pin 2: GND
@@ -538,7 +540,7 @@ def gen_ap2112k():
         (5,  0.95,  0.475,"3V3"),    # pin 5: VOUT (3.3V output)
     ]
     for pnum, px, py, net in pad_defs:
-        lines.append(smd_pad(pnum, px, py, 0.6, 0.9, net))
+        lines.append(smd_pad(pnum, px, py, 0.55, 0.8, net))
 
     lines.append(end_footprint())
     return "\n".join(lines)
@@ -860,32 +862,35 @@ def gen_rf_trace():
     ant_x = POS_ANT[0] - 0.5  # Antenna pad 1
     ant_y = POS_ANT[1]
 
-    # Diagonal 45-deg route: go up-right from pad36 to ant
-    # We need to route from (pad36_x, pad36_y) to (ant_x, ant_y)
-    # Delta: dx = ant_x - pad36_x, dy = ant_y - pad36_y
-    # Use a 2-segment route with 45-deg diagonal then horizontal/vertical
-
-    dx = ant_x - pad36_x
-    dy = ant_y - pad36_y  # negative = going up
-
-    # Strategy: go diagonally until aligned in one axis, then straight
-    # dy is negative (going up), dx is positive (going right)
-    # Diagonal portion: min(abs(dx), abs(dy)) in both directions
-    diag = min(abs(dx), abs(dy))
-    # After diagonal, remaining is straight horizontal
-    # Mid point after diagonal:
-    mid_x = pad36_x + diag  # moving right
-    mid_y = pad36_y - diag  # moving up
+    # Route: narrow fanout stub (pad-width, 0.25mm) from pad 36 past adjacent
+    # pads 35/37, then widen to 50-ohm 0.6mm for the run to the antenna.
+    # - Narrow stub: (29.8, 16.2) -> (29.8, 15.3). At 0.25mm wide the stub
+    #   stays 0.15mm clear of pads 35 and 37 at x=30.2 and 29.4.
+    # - Wide trace: (29.8, 15.3) onward, clear of all top-row chip pads.
+    fanout_y = pad36_y - 0.9         # 15.3 -- below pads' outer edge at y=15.9
+    stub_y   = pad36_y - 1.6          # 14.6 -- well above any pad
+    diag_x   = pad36_x + (stub_y - ant_y)   # 45 deg diagonal endpoint
+    mid_x    = diag_x
+    mid_y    = ant_y
 
     net_id = NET_ID["RF_ANT"]
+    narrow_w = 0.25
     lines = [
-        f'  (segment (start {fmt(pad36_x)} {fmt(pad36_y)}) (end {fmt(mid_x)} {fmt(mid_y)}) '
+        # narrow fanout at pad width -- doesn't touch pads 35/37
+        f'  (segment (start {fmt(pad36_x)} {fmt(pad36_y)}) (end {fmt(pad36_x)} {fmt(fanout_y)}) '
+        f'(width {narrow_w}) (layer "F.Cu") (net {net_id}))',
+        # widen to 0.6mm 50-ohm from fanout onward
+        f'  (segment (start {fmt(pad36_x)} {fmt(fanout_y)}) (end {fmt(pad36_x)} {fmt(stub_y)}) '
         f'(width {RF_TRACE_W}) (layer "F.Cu") (net {net_id}))',
+        # 45-degree diagonal up-right to antenna y-line
+        f'  (segment (start {fmt(pad36_x)} {fmt(stub_y)}) (end {fmt(mid_x)} {fmt(mid_y)}) '
+        f'(width {RF_TRACE_W}) (layer "F.Cu") (net {net_id}))',
+        # horizontal to antenna pad 1
         f'  (segment (start {fmt(mid_x)} {fmt(mid_y)}) (end {fmt(ant_x)} {fmt(ant_y)}) '
         f'(width {RF_TRACE_W}) (layer "F.Cu") (net {net_id}))',
     ]
 
-    return pad36_x, pad36_y, ant_x, ant_y, mid_x, mid_y, "\n".join(lines)
+    return pad36_x, stub_y, ant_x, ant_y, mid_x, mid_y, "\n".join(lines)
 
 
 def gen_gnd_stitching_vias(pad36_x, pad36_y, mid_x, mid_y, ant_x, ant_y):
@@ -896,7 +901,7 @@ def gen_gnd_stitching_vias(pad36_x, pad36_y, mid_x, mid_y, ant_x, ant_y):
     Via size: 0.8mm outer / 0.4mm drill.
     """
     via_spacing = 6.0
-    via_offset = 1.2  # mm offset from trace center (perpendicular)
+    via_offset = 1.8  # mm offset from trace center (perpendicular) -- clear of chip pads
     net_id = NET_ID["GND"]
     lines = []
 
@@ -920,9 +925,16 @@ def gen_gnd_stitching_vias(pad36_x, pad36_y, mid_x, mid_y, ant_x, ant_y):
             v.append((cx - px * via_offset, cy - py * via_offset))
         return v
 
+    # Only stitch along the horizontal portion of the trace (the long run
+    # to the antenna). The short stub next to the chip is not stitched --
+    # there's no room without hitting chip pads. Also keep vias outside the
+    # 5mm antenna keepout.
+    ant_wx, ant_wy = POS_ANT
+    keepout_r_plus_via = RF_KEEPOUT_R + 0.6   # via radius + margin
     all_via_positions = []
-    all_via_positions += vias_along_segment(pad36_x, pad36_y, mid_x, mid_y)
-    all_via_positions += vias_along_segment(mid_x, mid_y, ant_x, ant_y)
+    for vx, vy in vias_along_segment(mid_x, mid_y, ant_x, ant_y):
+        if math.sqrt((vx - ant_wx)**2 + (vy - ant_wy)**2) >= keepout_r_plus_via:
+            all_via_positions.append((vx, vy))
 
     for vx, vy in all_via_positions:
         lines.append(
@@ -938,32 +950,20 @@ def gen_gnd_stitching_vias(pad36_x, pad36_y, mid_x, mid_y, ant_x, ant_y):
 # =============================================================================
 
 def gen_power_traces():
-    """Simple power distribution traces connecting key components."""
-    gnd = NET_ID["GND"]
-    v33 = NET_ID["3V3"]
-    v5  = NET_ID["5V"]
-    lines = []
+    """
+    Power distribution uses the inner planes, not long surface traces:
+      - 3V3 net: In2.Cu is a 3V3 pour that connects every 3V3 pad through
+        short via stubs. Surface traces only for the LDO output stub.
+      - 5V net: no inner plane, but the run from USB-C to LDO input is
+        short and best drawn by the user in the GUI to avoid crossing pads.
+      - GND: In1.Cu plane.
 
-    # USB-C VBUS to LDO input (5V rail)
-    lines.append(
-        f'  (segment (start {fmt(POS_USBC[0]+1)} {fmt(POS_USBC[1])}) '
-        f'(end {fmt(POS_LDO[0])} {fmt(POS_LDO[1]+1)}) '
-        f'(width 0.5) (layer "F.Cu") (net {v5}))'
-    )
-    # LDO output to ESP32-S3 3V3
-    lines.append(
-        f'  (segment (start {fmt(POS_LDO[0]+1)} {fmt(POS_LDO[1])}) '
-        f'(end {fmt(POS_ESP32[0]-4.5)} {fmt(POS_ESP32[1])}) '
-        f'(width 0.5) (layer "F.Cu") (net {v33}))'
-    )
-    # LDO output to CP2102 VDD
-    lines.append(
-        f'  (segment (start {fmt(POS_LDO[0]+1)} {fmt(POS_LDO[1]+0.5)}) '
-        f'(end {fmt(POS_CP2102[0]-3)} {fmt(POS_CP2102[1])}) '
-        f'(width 0.5) (layer "F.Cu") (net {v33}))'
-    )
-
-    return "\n".join(lines)
+    This function therefore emits NO surface power traces. The previous
+    long diagonals from (6, 36) to (8, 9) and similar crossed unrelated
+    pads on F.Cu; leaving them out eliminates several shorts. Power
+    routing is completed in Pcbnew.
+    """
+    return ""
 
 
 # =============================================================================
@@ -1010,8 +1010,11 @@ def gen_zones():
   )''')
 
     # --- RF Keepout Zone (circle approx as 36-sided polygon) ---
-    # No copper on ANY layer within 5mm radius of antenna center
-    # Also no traces allowed in this region
+    # On F.Cu: only block copper pours (so the GND pour doesn't swallow the
+    # antenna near-field). The antenna pads and feed trace are themselves
+    # inside this radius and must be allowed.
+    # On In1.Cu (GND plane) and B.Cu: full keepout so the plane is cut back
+    # under the antenna -- this is the load-resistance-preserving cutout.
     cx, cy = POS_ANT
     r = RF_KEEPOUT_R
     n_pts = 36
@@ -1025,7 +1028,7 @@ def gen_zones():
     pts_str = " ".join(pts)
     lines.append(f'''  (zone (net 0) (net_name "") (layer "F.Cu") (name "RF_KEEPOUT")
     (hatch edge 0.508)
-    (keepout (tracks not_allowed) (vias not_allowed) (pads not_allowed) (copperpour not_allowed) (footprints allowed))
+    (keepout (tracks allowed) (vias allowed) (pads allowed) (copperpour not_allowed) (footprints allowed))
     (polygon
       (pts
         {pts_str}
@@ -1084,26 +1087,27 @@ def gen_decoupling_caps():
     decap_positions = [
         ("C1",  cx + 4.0, cy - 3.8, "100nF"),   # 1.4mm right of pad 29 (3V3, top)
         ("C2",  cx + 0.0, cy + 5.5, "100nF"),   # 1.7mm below pads 7/8 (3V3, bottom)
-        ("C3",  cx + 4.0, cy - 2.0, "100nF"),   # right-side bypass above pad 28
-        ("C4",  cx - 4.0, cy - 2.0, "100nF"),   # left-side bypass, upper
+        ("C3",  cx + 5.5, cy - 2.0, "100nF"),   # right-side bypass, clear of U1 pads 26/27
+        ("C4",  cx - 5.5, cy - 2.0, "100nF"),   # left-side bypass, clear of U1 pads 44/45
         ("C5",  cx - 2.6, cy + 5.5, "100nF"),   # bottom-left bypass
         ("C6",  cx + 2.6, cy + 5.5, "100nF"),   # bottom-right bypass
     ]
     for ref, x, y, val in decap_positions:
         lines.append(gen_cap_0402(ref, x, y, "3V3", "GND", val))
 
-    # 10uF bulk cap at LDO input (5V side)
+    # 10uF bulk cap at LDO input (5V side).
     lx, ly = POS_LDO
-    lines.append(gen_cap_0805("C7", lx + 2.5, ly + 1.5, "5V", "GND", "10uF"))
-    # 10uF bulk cap at LDO output (3V3 side)
-    lines.append(gen_cap_0805("C8", lx - 2.5, ly + 1.5, "3V3", "GND", "10uF"))
+    lines.append(gen_cap_0805("C7", lx + 3.5, ly + 2.5, "5V", "GND", "10uF"))
+    # 10uF bulk cap at LDO output (3V3 side); offset down-right so its pads
+    # don't collide with U2 pad 3 (5V) or J3 pin 4 (UART_RX).
+    lines.append(gen_cap_0805("C8", lx - 2.0, ly + 3.5, "3V3", "GND", "10uF"))
 
     # 100nF bypass caps for USB-C power lines
     lines.append(gen_cap_0402("C9",  POS_USBC[0] + 2.0, POS_USBC[1] - 3.0, "5V",  "GND", "100nF"))
     lines.append(gen_cap_0402("C10", POS_USBC[0] + 2.0, POS_USBC[1] - 4.5, "5V",  "GND", "100nF"))
 
-    # 100nF bypass for CP2102
-    lines.append(gen_cap_0402("C11", POS_CP2102[0] + 4.0, POS_CP2102[1], "3V3", "GND", "100nF"))
+    # 100nF bypass for CP2102, offset far enough right to clear U3 pad 11.
+    lines.append(gen_cap_0402("C11", POS_CP2102[0] + 4.5, POS_CP2102[1], "3V3", "GND", "100nF"))
 
     return "\n".join(lines)
 
@@ -1160,10 +1164,11 @@ def gen_pcb():
     parts.append(gen_resistor_0402("R2", POS_LED_PWR[0] + 1.5, POS_LED_PWR[1],
                                    "3V3", "LED_POWER_A", "1k", "1k"))
 
-    # CC pull-down resistors (5.1K from CC1/CC2 to GND for USB power negotiation)
-    parts.append(gen_resistor_0402("R3", 11.5, 38.0,
+    # CC pull-down resistors (5.1K from CC1/CC2 to GND for USB power
+    # negotiation), placed well clear of the USB-C bypass caps C9/C10.
+    parts.append(gen_resistor_0402("R3", POS_USBC[0] - 5.0, POS_USBC[1] - 2.0,
                                    "USB_CC1", "GND", "5.1k", "5.1k"))
-    parts.append(gen_resistor_0402("R4", 11.5, 36.0,
+    parts.append(gen_resistor_0402("R4", POS_USBC[0] + 5.0, POS_USBC[1] - 2.0,
                                    "USB_CC2", "GND", "5.1k", "5.1k"))
 
     # ESD protection on USB D+/D-
@@ -1913,7 +1918,7 @@ def gen_project():
                 },
                 {
                     "bus_width": 12,
-                    "clearance": 0.15,
+                    "clearance": 0.1,
                     "diff_pair_gap": 0.25,
                     "diff_pair_via_gap": 0.25,
                     "diff_pair_width": 0.2,

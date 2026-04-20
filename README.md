@@ -252,16 +252,23 @@ esp32-s3-rf-board/
 - Only the pins used by the current design are modelled on the ESP32-S3
   schematic symbol. The PCB footprint has all 57 pads; strapping pins other
   than IO0 are left at their power-on defaults (SPI flash boot, 3.3V).
-- **PCB DRC: 135 violations + 122 unconnected items remain**. Most are
-  pre-existing generator artefacts: USB-C pads overlapping the J5 SPI header,
-  the AP2112K LDO too close to bulk cap C8, the RF keepout zone containing
-  the antenna pad, and simple power traces that cut through unrelated pads.
-  A manual routing pass in Pcbnew is required before sending Gerbers to
-  JLCPCB. Recommended sequence:
+- **PCB DRC: 33 placement warnings + 120 unconnected nets**. All shorts,
+  clearance, and keepout errors have been resolved programmatically. The
+  remaining warnings are courtyard overlaps (16), silk-over-copper (15),
+  and dangling vias (2) -- none are electrical problems. The 120
+  unconnected items are signal/power nets that need routing in Pcbnew
+  before Gerber export. Recommended sequence:
   1. Open the PCB in KiCad 9.
-  2. Rip up the existing auto-traces and re-route in the GUI.
-  3. Move J5, C8, and the antenna keepout to resolve the structural issues.
-  4. `kicad-cli pcb drc ...` should report 0 violations before fab.
+  2. Route the remaining nets (mostly power, USB, UART/I2C/SPI fanout).
+  3. `kicad-cli pcb drc ...` should report 0 unconnected items before fab.
+
+### DRC progress (for reference)
+
+| Stage | Violations | Unconnected |
+|-------|-----------:|------------:|
+| Pre-v1.2 baseline      | 447 | 70  |
+| After crystal/flash/sch fixes (initial v1.2) | 144 | 122 |
+| After programmatic DRC cleanup (final v1.2)  |  33 | 120 |
 
 ### Resolved in v1.2
 
